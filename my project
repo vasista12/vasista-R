@@ -1,0 +1,274 @@
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from pymongo import MongoClient
+from bcrypt import hashpw, gensalt, checkpw
+from flask_session import Session
+import os
+
+# Flask app setup
+app = Flask(__name__)
+app.secret_key = 'supersecretkey'  # Replace with your own secret key
+
+# Flask-Session setup
+app.config['SESSION_TYPE'] = 'filesystem'
+Session(app)
+
+# MongoDB connection
+client = MongoClient('mongodb://localhost:27017/')
+db = client['internship_db']
+users = db['users']
+orders = db['orders']
+
+# Ensure MongoDB has a test user
+def create_test_user():
+    if users.count_documents({'username': 'admin'}) == 0:
+        hashed_password = hashpw('admin123'.encode('utf-8'), gensalt())
+        users.insert_one({'username': 'admin', 'password': hashed_password})
+create_test_user()
+
+# Route to render login page
+@app.route('/')
+def index():
+    return render_template('login.html')
+
+# Login Route
+@app.route('/login', methods=['POST'])
+def login():
+    username = request.form['username']
+    password = request.form['password'].encode('utf-8')
+
+    print(f"Attempting login with Username: {username}")  # Debugging output
+
+    user = users.find_one({'username': username})
+
+    if user:
+        print(f"User found: {user}")  # Debugging output
+        if checkpw(password, user['password']):
+            session['username'] = username
+            print("Password is correct. Redirecting to create_order.")  # Debugging output
+            return {'success': True}  # JSON response for success
+        else:
+            print("Password does not match.")  # Debugging output
+            return {'success': False, 'message': 'Incorrect password'}
+    else:
+        print("No user found with that username.")  # Debugging output
+        return {'success': False, 'message': 'Username not found'}
+# Protected Order Creation Route
+@app.route('/order', methods=['GET', 'POST'])
+def create_order():
+    if 'username' not in session:
+        print('username not in session redirecting to index page')
+        return redirect(url_for('index'))
+
+
+    if request.method == 'POST':
+        order_number = request.form['order_number']
+        writeup = request.files['writeup']
+        title_commitment = request.files['title_commitment']
+
+        # Check for unique order number
+        existing_order = orders.find_one({'order_number': order_number})
+        if existing_order:
+            flash('Order number already exists, please choose another')
+            return redirect(url_for('create_order'))
+
+        # Save files and order to MongoDB
+        order_data = {
+            'order_number': order_number,
+            'writeup_filename': writeup.filename,
+            'title_commitment_filename': title_commitment.filename,
+            'created_by': session['username']
+        }
+        orders.insert_one(order_data)
+
+        # Save the files to the 'uploads/' directory
+        os.makedirs('uploads', exist_ok=True)
+        writeup.save(os.path.join('uploads', writeup.filename))
+        title_commitment.save(os.path.join('uploads', title_commitment.filename))
+
+        flash('Order created successfully!')
+        return redirect(url_for('create_order'))
+    print('navigating to order.html')
+    return render_template('order.html')
+
+
+# Logout Route
+@app.route('/logout')
+def logout():
+    session.pop('username', None)
+    return redirect(url_for('index'))
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+
+    <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Create Order</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .order-box {
+      background-color: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
+      width: 400px;
+    }
+    input, button {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    button {
+      background-color: #28a745;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #218838;
+    }
+    .error {
+      color: red;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="order-box">
+    <h2>Create New Order</h2>
+    <form id="orderForm" method="POST" enctype="multipart/form-data">
+      <input type="text" name="order_number" placeholder="Order Number" required>
+
+      <label for="writeup">Upload Write-up Report:</label>
+      <input type="file" name="writeup" required>
+
+      <label for="title_commitment">Upload Title Commitment Report:</label>
+      <input type="file" name="title_commitment" required>
+
+      <button type="submit">Create Order</button>
+
+      <!-- Flash message block to display errors or success messages -->
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <ul>
+            {% for message in messages %}
+              <li class="error">{{ message }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+    </form>
+  </div>
+
+</body>
+</html>
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .login-box {
+      background-color: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    button {
+      padding: 10px;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #218838;
+    }
+    .error {
+      color: red;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="login-box">
+    <h2>Login</h2>
+    <form id="loginForm">
+      <input type="text" id="username" placeholder="Username" required>
+      <input type="password" id="password" placeholder="Password" required>
+      <button type="submit">Login</button>
+      <p id="errorMessage" class="error"></p>
+    </form>
+  </div>
+
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+  e.preventDefault();
+
+  const formData = new FormData();
+  formData.append('username', document.getElementById('username').value);
+  formData.append('password', document.getElementById('password').value);
+
+  const errorMessage = document.getElementById('errorMessage');
+
+  fetch('/login', {
+    method: 'POST',
+    body: formData
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    return response.json();
+  })
+  .then(data => {
+    if (data.success) {
+      window.location.href = '/order';  // Redirect to order creation page
+    } else {
+      errorMessage.textContent = data.message;
+    }
+  })
+  .catch(error => {
+    console.error('Fetch error:', error);  // Log the actual error
+    errorMessage.textContent = 'Error occurred. Please try again.';
+  });
+});
+
+  </script>
+</body>
+</html>
+
